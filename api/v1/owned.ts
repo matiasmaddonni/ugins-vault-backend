@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { authenticate } from '../_lib/auth.js';
+import { triggerOnDemandIngest } from '../_lib/dispatch.js';
 import { requireMethod, sendJson } from '../_lib/http.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,7 +35,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  sendJson(res, 200, { ok: true, count: cards.length });
+  // The insert trigger (0005) enqueues any of these cards that have no price
+  // yet. If the queue is now non-empty, kick the on-demand ingest so prices
+  // show ASAP instead of at the next daily cron. Best-effort: a failed check or
+  // dispatch never fails the save (the daily cron is the backstop).
+  let dispatched = false;
+  try {
+    const { data: pending } = await auth.db.rpc('price_queue_size');
+    if (typeof pending === 'number' && pending > 0) {
+      dispatched = await triggerOnDemandIngest();
+    }
+  } catch {
+    // ignore — prices will still arrive via the daily cron
+  }
+
+  sendJson(res, 200, { ok: true, count: cards.length, dispatched });
 }
 
 /** Validates + de-duplicates the request body. Returns null if malformed. */

@@ -23,6 +23,13 @@ export const FINISHES = ['normal', 'foil', 'etched'] as const;
 /** Rolling history window we keep in the DB; older rows are pruned. */
 export const KEEP_DAYS = 90;
 
+/**
+ * On-demand queue: how long before a card with no MTGJSON price (token, art
+ * card, etc.) is retried. Must match the cooldown in price_queue_size()
+ * (migration 0005) so the dispatch check and the claim agree.
+ */
+export const PRICE_RETRY_COOLDOWN_DAYS = 7;
+
 /** Backfill seeds at most this many days back (defaults to KEEP_DAYS). */
 const parsedBackfillDays = Number.parseInt((process.env.BACKFILL_DAYS ?? '').trim(), 10);
 export const BACKFILL_DAYS =

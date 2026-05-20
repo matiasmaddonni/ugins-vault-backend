@@ -42,10 +42,13 @@ api/                      Vercel serverless functions (TypeScript)
 ingest/src/               GitHub Actions ingest (TypeScript, streaming)
   daily.ts                AllPricesToday → today's prices + FX + prune
   backfill.ts             AllPrices → seed ~90 days (manual)
+  onDemand.ts             drains price_backfill_queue → new cards' prices ASAP
   fxOnly.ts               FX-only refresh
   lib/                    config, db (service role), download, mtgjson stream, fx
 supabase/migrations/      0001 schema · 0002 RLS · 0003 auth trigger · 0004 RPC
+                          · 0005 on-demand price queue
 .github/workflows/        ingest-daily.yml (cron) · backfill.yml (manual)
+                          · ingest-on-demand.yml (repository_dispatch)
 vercel.json               rewrites /v1/* → /api/v1/*
 ```
 
@@ -60,6 +63,7 @@ vercel.json               rewrites /v1/* → /api/v1/*
 | `owned`    | per-user | `(user_id, card_id)` PK, `quantity`. `card_id` = **Scryfall printing UUID**. RLS: a user sees only their rows |
 | `prices`   | global  | `(card_id, source, finish, date)` PK, `retail`, `currency`. Readable by any authenticated user; only the ingest (service role) writes |
 | `fx`       | global  | `quote` PK (`ARS`/`EUR`), `rate` (USD→quote), `fetched_at` |
+| `price_backfill_queue` | global | `card_id` PK. Cards added but with no price yet, awaiting the on-demand ingest. Written by an `owned`-insert trigger; drained by the ingest. No RLS policy → invisible to clients |
 
 - **Sources:** `cardkingdom`, `tcgplayer`, `cardmarket`. **Finishes:** `normal`,
   `foil`, `etched`.
@@ -84,6 +88,7 @@ vercel.json               rewrites /v1/* → /api/v1/*
    - `supabase/migrations/0002_rls.sql`
    - `supabase/migrations/0003_auth_trigger.sql`
    - `supabase/migrations/0004_functions.sql`
+   - `supabase/migrations/0005_price_queue.sql`
 3. **Auth config** (Authentication → Providers / Sign In):
    - Enable **Email** (password) and, for passwordless, **Magic Link**. These are
      sensible defaults for a personal app; add an OAuth provider later if wanted.
@@ -108,9 +113,13 @@ supabase db push           # applies supabase/migrations/*
    |------|-------|
    | `SUPABASE_URL` | `https://<ref>.supabase.co` |
    | `SUPABASE_ANON_KEY` | the **publishable / anon** key (safe; cannot bypass RLS) |
+   | `GH_DISPATCH_TOKEN` | *(optional)* fine-grained PAT, `Actions: read and write` on this repo — lets `PUT /v1/owned` trigger the on-demand ingest |
+   | `GH_REPO` | *(optional)* `owner/name` of this repo |
 
    > Do **not** put the service-role key in Vercel. The API only ever verifies
-   > JWTs and queries under the caller's RLS.
+   > JWTs and queries under the caller's RLS. `GH_DISPATCH_TOKEN` is a separate,
+   > narrowly scoped GitHub token (not the service-role key); if it's unset the
+   > API simply skips the dispatch and prices arrive via the daily cron.
 3. Deploy. Public routes are `/v1/...` (rewritten to `/api/v1/...`). Smoke test:
    `curl https://<your-app>.vercel.app/api/health`.
 
@@ -132,6 +141,43 @@ Then:
    *Run workflow*). Seeds ~90 days for the owned-union.
 3. The **Daily price ingest** runs on cron (`09:00 UTC`) and keeps things fresh.
    It also keeps the Supabase project awake.
+
+### On-demand prices (new cards show ASAP)
+
+So a freshly added card doesn't wait until the next `09:00 UTC` cron:
+
+```
+PUT /v1/owned ─▶ replace_owned ─▶ trigger enqueues card_ids with NO price yet
+      │                                     (price_backfill_queue)
+      └─ if queue non-empty ─▶ GitHub repository_dispatch "new-cards"
+                                     │
+                                     ▼
+                       ingest-on-demand.yml ─▶ onDemand.ts
+                         AllPricesToday (current) then AllPrices (history),
+                         scoped to the queued ids ─▶ upsert ─▶ clear queue
+```
+
+- The `owned`-insert trigger (migration `0005`) only enqueues cards that have
+  **no** price rows, so re-saving an unchanged collection enqueues nothing and
+  fires no job.
+- Cards MTGJSON has no paper price for (tokens, art cards) can't get a price
+  row, so they'd otherwise re-enqueue on every save. The ingest stamps them
+  with a **7-day cooldown** instead of deleting them, and the dispatch check
+  ignores cooled-down rows — so they're retried at most weekly, not per save.
+- One `PUT` ⇒ at most one dispatch. The on-demand workflow shares the `ingest`
+  concurrency group with daily/backfill, so the three never write at once and a
+  burst of dispatches collapses (each run drains the whole queue; later runs
+  find it empty).
+- **Latency is minutes, not seconds, by design.** MTGJSON has no per-card API —
+  the job still streams the dumps (just filtered to the new ids). The dispatch
+  fires within seconds; runner spin-up + streaming `AllPricesToday` is what
+  gates the first price. History (`AllPrices`, ~135 MB gz) follows in the same
+  run.
+- **Setup:** create a fine-grained PAT (`Actions: read and write` on this repo),
+  set it as `GH_DISPATCH_TOKEN` + `GH_REPO` on Vercel (above). Without them the
+  trigger is skipped and the daily cron remains the backstop. The queue table
+  needs no extra GitHub config on the Supabase side — the dispatch comes from
+  the Vercel API.
 
 ### Local runs
 
