@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { authenticate } from '../_lib/auth';
-import { firstStr, requireMethod, sendJson } from '../_lib/http';
+import { authenticate } from '../_lib/auth.js';
+import { firstStr, requireMethod, sendJson } from '../_lib/http.js';
 import {
   addDaysISO,
   clampInt,
@@ -9,7 +9,7 @@ import {
   toCardPrices,
   todayISO,
   type PriceRow
-} from '../_lib/pricing';
+} from '../_lib/pricing.js';
 
 /**
  * GET /v1/prices?window=35&source=tcgplayer

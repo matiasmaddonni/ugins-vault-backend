@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { authenticate } from '../_lib/auth';
-import { firstStr, requireMethod, sendJson } from '../_lib/http';
+import { authenticate } from '../_lib/auth.js';
+import { firstStr, requireMethod, sendJson } from '../_lib/http.js';
 import {
   addDaysISO,
   clampFloat,
@@ -11,7 +11,7 @@ import {
   pickSource,
   todayISO,
   type PriceRow
-} from '../_lib/pricing';
+} from '../_lib/pricing.js';
 
 /**
  * GET /v1/movers?source=tcgplayer&window=35&threshold=1

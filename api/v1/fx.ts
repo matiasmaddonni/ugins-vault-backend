@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { authenticate } from '../_lib/auth';
-import { requireMethod, sendJson } from '../_lib/http';
-import { num } from '../_lib/pricing';
+import { authenticate } from '../_lib/auth.js';
+import { requireMethod, sendJson } from '../_lib/http.js';
+import { num } from '../_lib/pricing.js';
 
 interface FxRow {
   quote: string;

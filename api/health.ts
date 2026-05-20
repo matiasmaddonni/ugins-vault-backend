@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { sendJson } from './_lib/http';
+import { sendJson } from './_lib/http.js';
 
 /** GET /api/health — unauthenticated liveness check. */
 export default function handler(_req: VercelRequest, res: VercelResponse): void {

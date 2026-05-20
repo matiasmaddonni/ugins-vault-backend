@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { authenticate } from '../_lib/auth';
-import { requireMethod, sendJson } from '../_lib/http';
+import { authenticate } from '../_lib/auth.js';
+import { requireMethod, sendJson } from '../_lib/http.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
