@@ -1,12 +1,19 @@
 import { createReadStream } from 'node:fs';
+import { createRequire } from 'node:module';
 import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
-import { parser } from 'stream-json';
-import { pick } from 'stream-json/filters/Pick';
-import { streamObject } from 'stream-json/streamers/StreamObject';
 import { defaultCurrency, FINISHES } from './config';
 import type { PriceUpsertRow } from './db';
+
+// stream-json is CommonJS and attaches its exports as properties on
+// module.exports, which Node's ESM named-import interop (cjs-module-lexer)
+// fails to detect ("does not provide an export named 'parser'"). Load it via
+// createRequire to get the documented named exports reliably under tsx/Node ESM.
+const require = createRequire(import.meta.url);
+const { parser } = require('stream-json') as typeof import('stream-json');
+const { pick } = require('stream-json/filters/Pick') as typeof import('stream-json/filters/Pick');
+const { streamObject } = require('stream-json/streamers/StreamObject') as typeof import('stream-json/streamers/StreamObject');
 
 // ───────────────────────────────────────────────────────────────────────────
 // Streaming MTGJSON readers.
