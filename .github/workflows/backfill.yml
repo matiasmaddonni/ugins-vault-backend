@@ -1,0 +1,38 @@
+name: Backfill price history
+
+# Manual only. Streams the full AllPrices (~135 MB gz) to seed history for the
+# owned-union. Run once after the first users add cards, then rely on the daily
+# job. Safe to re-run (idempotent upsert).
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of history to seed (max kept is 90)'
+        required: false
+        default: '90'
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run backfill
+        run: npm run ingest:backfill
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BACKFILL_DAYS: ${{ inputs.days }}
+          PRICE_SOURCES: ${{ vars.PRICE_SOURCES }}

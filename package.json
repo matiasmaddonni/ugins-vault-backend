@@ -1,0 +1,27 @@
+{
+  "name": "ugins-vault-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Price + auth backend for Ugin's Vault (MTG collection app). Supabase + Vercel read API + GitHub Actions ingest.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "ingest:daily": "tsx ingest/src/daily.ts",
+    "ingest:backfill": "tsx ingest/src/backfill.ts",
+    "ingest:fx": "tsx ingest/src/fxOnly.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "stream-json": "^1.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/stream-json": "^1.7.7",
+    "@vercel/node": "^5.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

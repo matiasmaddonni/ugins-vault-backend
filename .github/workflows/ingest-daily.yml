@@ -1,0 +1,34 @@
+name: Daily price ingest
+
+on:
+  schedule:
+    # 09:00 UTC daily. GitHub may delay scheduled runs under load; that's fine —
+    # this job is idempotent (upsert) and also keeps the Supabase project awake.
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+# Never let daily + backfill write at the same time.
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run daily ingest
+        run: npm run ingest:daily
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PRICE_SOURCES: ${{ vars.PRICE_SOURCES }}
