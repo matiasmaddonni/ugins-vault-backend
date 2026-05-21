@@ -36,10 +36,24 @@ export async function distinctOwnedCardIds(): Promise<Set<string>> {
 /** Upserts price rows in chunks. Returns the number of rows written. */
 export async function upsertPrices(rows: PriceUpsertRow[]): Promise<number> {
   if (rows.length === 0) return 0;
+
+  // Collapse duplicate conflict keys within the batch (last wins). The
+  // uuid->scryfallId map is many-to-one — multiple MTGJSON uuids share one
+  // scryfallId for multi-faced cards — so two source uuids can emit the same
+  // (card_id, source, finish, date) row. Postgres ON CONFLICT DO UPDATE cannot
+  // affect the same row twice in one statement, so without this dedupe the whole
+  // upsert aborts ("command cannot affect row a second time"). Faces share a
+  // price, so collapsing to the last value is correct.
+  const byKey = new Map<string, PriceUpsertRow>();
+  for (const row of rows) {
+    byKey.set(`${row.card_id}|${row.source}|${row.finish}|${row.date}`, row);
+  }
+  const deduped = [...byKey.values()];
+
   const chunkSize = 1000;
   let written = 0;
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const slice = rows.slice(i, i + chunkSize);
+  for (let i = 0; i < deduped.length; i += chunkSize) {
+    const slice = deduped.slice(i, i + chunkSize);
     const { error } = await db
       .from('prices')
       .upsert(slice, { onConflict: 'card_id,source,finish,date' });
