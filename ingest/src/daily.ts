@@ -1,25 +1,21 @@
 // Daily ingest. Pulls AllPricesToday (one day), restricted to the owned-union,
-// upserts today's prices, refreshes FX, and prunes > KEEP_DAYS. No serverless
-// time limit here — this runs on GitHub Actions.
+// upserts today's prices, and prunes > KEEP_DAYS. No serverless time limit here
+// — this runs on GitHub Actions. The daily run's reads + writes also keep the
+// free Supabase project from pausing.
 
 import { KEEP_DAYS, MTGJSON, PRICE_SOURCES } from './lib/config';
 import { distinctOwnedCardIds, prunePrices, upsertPrices } from './lib/db';
 import { cleanup, downloadToTemp } from './lib/download';
-import { runFx } from './lib/fx';
 import { buildOwnedUuidMap, streamPrices } from './lib/mtgjson';
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
   console.log('[daily] start', new Date().toISOString());
 
-  // FX first: also the keep-alive write, so the project stays awake even on a
-  // day with no owned cards.
-  await runFx();
-
   const owned = await distinctOwnedCardIds();
   console.log(`[daily] owned-union: ${owned.size} scryfall ids`);
   if (owned.size === 0) {
-    console.log('[daily] no owned cards — FX written, skipping price ingest');
+    console.log('[daily] no owned cards — nothing to ingest');
     return;
   }
 

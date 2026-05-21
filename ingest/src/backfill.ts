@@ -5,7 +5,6 @@
 import { BACKFILL_DAYS, KEEP_DAYS, MTGJSON, PRICE_SOURCES } from './lib/config';
 import { distinctOwnedCardIds, prunePrices, upsertPrices } from './lib/db';
 import { cleanup, downloadToTemp } from './lib/download';
-import { runFx } from './lib/fx';
 import { buildOwnedUuidMap, streamPrices } from './lib/mtgjson';
 
 function minDateISO(days: number): string {
@@ -22,7 +21,6 @@ async function main(): Promise<void> {
   console.log(`[backfill] owned-union: ${owned.size} scryfall ids`);
   if (owned.size === 0) {
     console.log('[backfill] no owned cards — nothing to seed');
-    await runFx();
     return;
   }
 
@@ -47,7 +45,6 @@ async function main(): Promise<void> {
   await cleanup(pricesPath);
   console.log(`[backfill] upserted ${written} price rows (since ${minDate})`);
 
-  await runFx();
   await prunePrices(KEEP_DAYS);
   console.log(`[backfill] done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 }

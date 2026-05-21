@@ -2,21 +2,23 @@
 
 Personal, multi-user price backend for the **Ugin's Vault** iOS app (a Magic:
 The Gathering collection tracker). It ingests MTGJSON prices **server-side** and
-serves each user's owned-card prices + history + movers + FX as a **few-KB
-JSON**, so the phone downloads kilobytes instead of the ~1.2 GB MTGJSON dump.
+serves each user's owned-card prices + history + movers as a **few-KB JSON**, so
+the phone downloads kilobytes instead of the ~1.2 GB MTGJSON dump.
 
-The card **catalogue stays on device** (seeded from Scryfall). This backend is
-**auth + prices + FX only**.
+The **collection lives on the backend** (authoritative): the app reads it back
+via `GET /v1/owned`, so it survives reinstalls and syncs across devices. The
+card **catalogue** (names, art, set codes) stays on device, seeded from
+Scryfall. This backend is **auth + prices only**.
 
 ```
               ┌──────────────────────── GitHub Actions (free) ───────────────────────┐
               │  daily cron: AllPricesToday.json.gz  ─┐                                │
  MTGJSON  ───▶│  manual:     AllPrices.json.gz       ─┤ stream + map uuid→scryfallId  │
-              │  AllIdentifiers.json.gz  (uuid map)  ─┘ upsert prices / FX (service)  │
+              │  AllIdentifiers.json.gz  (uuid map)  ─┘ upsert prices (service)        │
               └───────────────────────────────────────────┬───────────────────────────┘
                                                            ▼
  iOS app  ──(Supabase JWT)──▶  Vercel read API  ──(JWT, RLS)──▶  Supabase Postgres + Auth
-   PUT /v1/owned · GET /v1/prices · GET /v1/movers · GET /v1/fx        (free tier)
+   GET/PUT /v1/owned · GET /v1/prices · GET /v1/movers        (free tier)
 ```
 
 - **Supabase** (free): Postgres + Auth (user management) + Row-Level Security.
@@ -33,20 +35,18 @@ Everything is **TypeScript**. Big MTGJSON files are **streamed** (`stream-json`
 
 ```
 api/                      Vercel serverless functions (TypeScript)
-  _lib/                   shared (auth/JWT verify, http, pricing+movers port)
-  v1/owned.ts             PUT  /v1/owned
+  _lib/                   shared (auth/JWT verify, http, pricing+movers port, dispatch)
+  v1/owned.ts             GET + PUT  /v1/owned
   v1/prices.ts            GET  /v1/prices
   v1/movers.ts            GET  /v1/movers
-  v1/fx.ts                GET  /v1/fx
   health.ts               GET  /api/health
 ingest/src/               GitHub Actions ingest (TypeScript, streaming)
-  daily.ts                AllPricesToday → today's prices + FX + prune
+  daily.ts                AllPricesToday → today's prices + prune
   backfill.ts             AllPrices → seed ~90 days (manual)
   onDemand.ts             drains price_backfill_queue → new cards' prices ASAP
-  fxOnly.ts               FX-only refresh
-  lib/                    config, db (service role), download, mtgjson stream, fx
+  lib/                    config, db (service role), download, mtgjson stream
 supabase/migrations/      0001 schema · 0002 RLS · 0003 auth trigger · 0004 RPC
-                          · 0005 on-demand price queue
+                          · 0005 on-demand price queue · 0006 drop fx
 .github/workflows/        ingest-daily.yml (cron) · backfill.yml (manual)
                           · ingest-on-demand.yml (repository_dispatch)
 vercel.json               rewrites /v1/* → /api/v1/*
@@ -60,9 +60,8 @@ vercel.json               rewrites /v1/* → /api/v1/*
 |------------|---------|-------|
 | `auth.users` | —     | managed by Supabase Auth |
 | `profiles` | per-user | `user_id` PK → `auth.users`; auto-created on signup (trigger) |
-| `owned`    | per-user | `(user_id, card_id)` PK, `quantity`. `card_id` = **Scryfall printing UUID**. RLS: a user sees only their rows |
+| `owned`    | per-user | `(user_id, card_id)` PK, `quantity`. `card_id` = **Scryfall printing UUID**. **Authoritative collection** — the app restores it via `GET /v1/owned`. RLS: a user sees only their rows |
 | `prices`   | global  | `(card_id, source, finish, date)` PK, `retail`, `currency`. Readable by any authenticated user; only the ingest (service role) writes |
-| `fx`       | global  | `quote` PK (`ARS`/`EUR`), `rate` (USD→quote), `fetched_at` |
 | `price_backfill_queue` | global | `card_id` PK. Cards added but with no price yet, awaiting the on-demand ingest. Written by an `owned`-insert trigger; drained by the ingest. No RLS policy → invisible to clients |
 
 - **Sources:** `cardkingdom`, `tcgplayer`, `cardmarket`. **Finishes:** `normal`,
@@ -89,6 +88,7 @@ vercel.json               rewrites /v1/* → /api/v1/*
    - `supabase/migrations/0003_auth_trigger.sql`
    - `supabase/migrations/0004_functions.sql`
    - `supabase/migrations/0005_price_queue.sql`
+   - `supabase/migrations/0006_drop_fx.sql`
 3. **Auth config** (Authentication → Providers / Sign In):
    - Enable **Email** (password) and, for passwordless, **Magic Link**. These are
      sensible defaults for a personal app; add an OAuth provider later if wanted.
@@ -185,7 +185,6 @@ PUT /v1/owned ─▶ replace_owned ─▶ trigger enqueues card_ids with NO pric
 cp env.example .env        # fill in real values (service-role key for ingest)
 npm install
 npm run typecheck
-npm run ingest:fx          # FX only (cheap smoke test)
 npm run ingest:backfill    # full backfill locally (downloads ~135 MB gz)
 npm run ingest:daily       # daily ingest locally
 ```
@@ -202,15 +201,25 @@ endpoint), then sends the resulting access token as the bearer. The API verifies
 it (`getClaims`, ES256 local verify) and derives `user_id` from the `sub` claim;
 RLS scopes every query.
 
+### `GET /v1/owned` — my collection (restore)
+```jsonc
+{ "cards": [ { "cardId": "0000abcd-....", "quantity": 2 }, ... ], "count": 123 }
+```
+The authoritative collection. The app loads this on launch / after a reinstall
+to restore the user's cards (the on-device store is just a cache). Same shape as
+the `PUT` body, so it round-trips.
+
 ### `PUT /v1/owned` — replace my owned list
 ```jsonc
 // request
 { "cards": [ { "cardId": "0000abcd-....", "quantity": 2 }, ... ] }
 // response
-{ "ok": true, "count": 123 }
+{ "ok": true, "count": 123, "dispatched": true }
 ```
 Atomic replace (delete-then-insert in one transaction). `cardId` = Scryfall
-printing UUID. Duplicate ids are de-duplicated (last wins).
+printing UUID. Duplicate ids are de-duplicated (last wins). `dispatched` is
+`true` when this save enqueued at least one new-to-price card and the on-demand
+ingest was triggered (see *On-demand prices*); `false` otherwise.
 
 ### `GET /v1/prices?window=35&source=tcgplayer`
 ```jsonc
@@ -265,12 +274,6 @@ running `computeHistory` locally on `/v1/prices`. They agree for cards the
 backend has data for; the app additionally has Scryfall fallback prices the
 backend does not.
 
-### `GET /v1/fx`
-```jsonc
-{ "ars": 1180.0, "eur": 0.92, "fetchedAt": "2026-05-20T09:00:11Z" }
-```
-Global USD→ARS ("blue", `dolarapi.com.ar`) and USD→EUR (`frankfurter.app`).
-
 ---
 
 ## Notes
@@ -281,7 +284,10 @@ Scryfall id. The ingest streams `AllIdentifiers.json.gz` to build a
 `identifiers.scryfallId`), then keys/serves every price by **scryfallId** —
 which is what `owned.card_id` holds. `scryfallId` is not unique across
 multi-faced cards (several MTGJSON uuids share one); those collapse onto the same
-price row, which is correct (faces share a price).
+price row, which is correct (faces share a price). The ingest **dedupes by
+`(card_id, source, finish, date)` before upserting** so the many-to-one collapse
+can't put a duplicate conflict key in one statement (Postgres `ON CONFLICT` can't
+touch the same row twice).
 
 **Free-tier margins.** Prices are stored for the **union of all users' owned
 cards × 3 sources × ~90 days**. One user ≈ 40–200 MB, comfortably under the

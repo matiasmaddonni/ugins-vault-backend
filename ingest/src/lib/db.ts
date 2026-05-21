@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { PRICE_RETRY_COOLDOWN_DAYS, SERVICE_ROLE_KEY, SUPABASE_URL } from './config';
 
 // Service-role client. BYPASSRLS: reads every user's owned rows (the union) and
-// writes the global prices/fx tables. Server-side only.
+// writes the global prices table. Server-side only.
 export const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
@@ -139,12 +139,4 @@ export async function pricedCardIds(ids: string[]): Promise<Set<string>> {
     for (const row of data ?? []) found.add(String(row.card_id).toLowerCase());
   }
   return found;
-}
-
-export async function upsertFx(rows: { quote: string; rate: number }[]): Promise<void> {
-  if (rows.length === 0) return;
-  const now = new Date().toISOString();
-  const payload = rows.map((r) => ({ quote: r.quote, rate: r.rate, fetched_at: now }));
-  const { error } = await db.from('fx').upsert(payload, { onConflict: 'quote' });
-  if (error) throw new Error(`fx upsert failed: ${error.message}`);
 }
