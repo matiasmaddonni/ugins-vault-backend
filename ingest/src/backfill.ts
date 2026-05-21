@@ -3,7 +3,7 @@
 // dispatch or `npm run ingest:backfill`). NEVER run on Vercel.
 
 import { BACKFILL_DAYS, KEEP_DAYS, MTGJSON, PRICE_SOURCES } from './lib/config';
-import { distinctCollectionCardIds, prunePricedQueue, prunePrices, upsertPrices } from './lib/db';
+import { cooldownPendingQueue, distinctCollectionCardIds, prunePricedQueue, prunePrices, upsertPrices } from './lib/db';
 import { cleanup, downloadToTemp } from './lib/download';
 import { buildOwnedUuidMap, streamPrices } from './lib/mtgjson';
 
@@ -47,7 +47,8 @@ async function main(): Promise<void> {
 
   await prunePrices(KEEP_DAYS);
   const cleared = await prunePricedQueue();
-  console.log(`[backfill] cleared ${cleared} now-priced from queue — done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  const cooled = await cooldownPendingQueue();
+  console.log(`[backfill] cleared ${cleared} now-priced, cooled ${cooled} unpriced from queue — done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 }
 
 main().catch((err) => {

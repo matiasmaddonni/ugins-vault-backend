@@ -127,3 +127,21 @@ export async function prunePricedQueue(): Promise<number> {
   if (error) throw new Error(`prune priced queue failed: ${error.message}`);
   return typeof data === 'number' ? data : 0;
 }
+
+/**
+ * After a FULL-history pass (backfill/on-demand consult AllPrices), stamps any
+ * still-`pending` queue card as attempted. Those cards have no MTGJSON price, so
+ * this moves them out of "fetching" into noData (cooldown) instead of leaving
+ * them pending forever. Call only after prunePricedQueue (priced ones gone).
+ * Returns rows stamped.
+ */
+export async function cooldownPendingQueue(): Promise<number> {
+  const now = new Date().toISOString();
+  const { data, error } = await db
+    .from('price_backfill_queue')
+    .update({ last_attempt_at: now })
+    .is('last_attempt_at', null)
+    .select('card_id');
+  if (error) throw new Error(`cooldown pending queue failed: ${error.message}`);
+  return data?.length ?? 0;
+}
