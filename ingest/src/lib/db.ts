@@ -74,9 +74,9 @@ export async function prunePrices(keepDays: number): Promise<void> {
 
 /**
  * Reads the on-demand price queue and returns the *claimable* card ids: never
- * attempted, or past the retry cooldown. The caller resolves each id when done
- * (clearPriceQueue for those that got a price, markPriceQueueAttempted for
- * those that didn't), so cards enqueued mid-run survive for the next dispatch.
+ * attempted, or past the retry cooldown. The caller resolves them when done
+ * (prunePricedQueue drops the now-priced, markPriceQueueAttempted cools down the
+ * rest), so cards enqueued mid-run survive for the next dispatch.
  */
 export async function claimPriceQueue(): Promise<string[]> {
   const cutoff = new Date();
@@ -99,17 +99,6 @@ export async function claimPriceQueue(): Promise<string[]> {
   return ids;
 }
 
-/** Removes the given card ids from the on-demand price queue. */
-export async function clearPriceQueue(ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const chunkSize = 1000;
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const slice = ids.slice(i, i + chunkSize);
-    const { error } = await db.from('price_backfill_queue').delete().in('card_id', slice);
-    if (error) throw new Error(`price queue clear failed: ${error.message}`);
-  }
-}
-
 /**
  * Stamps last_attempt_at on queued cards we tried but found no price for, so
  * they sit out the retry cooldown instead of re-firing a job on every save.
@@ -128,15 +117,13 @@ export async function markPriceQueueAttempted(ids: string[]): Promise<void> {
   }
 }
 
-/** Of the given card ids, returns the subset that now has at least one price row. */
-export async function pricedCardIds(ids: string[]): Promise<Set<string>> {
-  const found = new Set<string>();
-  const chunkSize = 1000;
-  for (let i = 0; i < ids.length; i += chunkSize) {
-    const slice = ids.slice(i, i + chunkSize);
-    const { data, error } = await db.from('prices').select('card_id').in('card_id', slice);
-    if (error) throw new Error(`priced lookup failed: ${error.message}`);
-    for (const row of data ?? []) found.add(String(row.card_id).toLowerCase());
-  }
-  return found;
+/**
+ * Drops queue rows for cards that now have a price (via the prune_priced_queue
+ * RPC). Keeps the queue scoped to genuinely unpriced cards so price_status never
+ * reports a priced card as pending/noData. Returns rows removed.
+ */
+export async function prunePricedQueue(): Promise<number> {
+  const { data, error } = await db.rpc('prune_priced_queue');
+  if (error) throw new Error(`prune priced queue failed: ${error.message}`);
+  return typeof data === 'number' ? data : 0;
 }

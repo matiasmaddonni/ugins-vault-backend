@@ -4,7 +4,7 @@
 // keep the free Supabase project from pausing.
 
 import { KEEP_DAYS, MTGJSON, PRICE_SOURCES } from './lib/config';
-import { distinctCollectionCardIds, prunePrices, upsertPrices } from './lib/db';
+import { distinctCollectionCardIds, prunePricedQueue, prunePrices, upsertPrices } from './lib/db';
 import { cleanup, downloadToTemp } from './lib/download';
 import { buildOwnedUuidMap, streamPrices } from './lib/mtgjson';
 
@@ -33,7 +33,8 @@ async function main(): Promise<void> {
   console.log(`[daily] upserted ${written} price rows`);
 
   await prunePrices(KEEP_DAYS);
-  console.log(`[daily] pruned > ${KEEP_DAYS}d — done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  const cleared = await prunePricedQueue();
+  console.log(`[daily] pruned > ${KEEP_DAYS}d, cleared ${cleared} now-priced from queue — done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
 }
 
 main().catch((err) => {

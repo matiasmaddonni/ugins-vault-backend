@@ -5,18 +5,10 @@
 //
 // MTGJSON has no per-card endpoint, so we still stream the dumps — but scoped
 // to the queued ids. Order matters for "see prices ASAP": AllPricesToday is the
-// smaller file and lands today's price first; AllPrices then fills ~90d history
-// for the charts. Idempotent upserts make this safe alongside the daily job.
+// smaller file and lands today's price first; AllPrices then fills ~90d history.
 
 import { BACKFILL_DAYS, KEEP_DAYS, MTGJSON, PRICE_SOURCES } from './lib/config';
-import {
-  claimPriceQueue,
-  clearPriceQueue,
-  markPriceQueueAttempted,
-  prunePrices,
-  pricedCardIds,
-  upsertPrices
-} from './lib/db';
+import { claimPriceQueue, markPriceQueueAttempted, prunePricedQueue, prunePrices, upsertPrices } from './lib/db';
 import { cleanup, downloadToTemp } from './lib/download';
 import { buildOwnedUuidMap, streamPrices } from './lib/mtgjson';
 
@@ -35,15 +27,9 @@ async function streamFile(
   const path = await downloadToTemp(url, filename);
   let written = 0;
   try {
-    await streamPrices(
-      path,
-      uuidMap,
-      PRICE_SOURCES,
-      async (rows) => {
-        written += await upsertPrices(rows);
-      },
-      options
-    );
+    await streamPrices(path, uuidMap, PRICE_SOURCES, async (rows) => {
+      written += await upsertPrices(rows);
+    }, options);
   } finally {
     await cleanup(path);
   }
@@ -69,37 +55,31 @@ async function main(): Promise<void> {
   await cleanup(identifiersPath);
   console.log(`[on-demand] mapped ${uuidMap.size} MTGJSON uuids -> scryfall`);
 
-  if (uuidMap.size === 0) {
-    // None of the queued ids are MTGJSON paper cards (e.g. tokens). Cooldown
-    // them rather than delete — they'd re-enqueue immediately (no price row)
-    // and re-fire a job on every save.
-    console.log('[on-demand] no MTGJSON matches — cooling down queued ids');
-    await markPriceQueueAttempted(claimed);
-    return;
+  if (uuidMap.size > 0) {
+    const todayRows = await streamFile(MTGJSON.pricesToday, 'AllPricesToday.json.gz', uuidMap);
+    console.log(`[on-demand] upserted ${todayRows} rows from AllPricesToday`);
+    const histRows = await streamFile(MTGJSON.allPrices, 'AllPrices.json.gz', uuidMap, {
+      minDate: minDateISO(BACKFILL_DAYS)
+    });
+    console.log(`[on-demand] upserted ${histRows} rows from AllPrices`);
+    await prunePrices(KEEP_DAYS);
+  } else {
+    // None of the queued ids matched an MTGJSON paper card this run (tokens, or
+    // a transient identifiers miss). No upserts; the prune+stamp below still
+    // keeps the queue honest.
+    console.log('[on-demand] no MTGJSON matches this run');
   }
 
-  // Today's price first (smaller file) so the current value shows ASAP...
-  const todayRows = await streamFile(MTGJSON.pricesToday, 'AllPricesToday.json.gz', uuidMap);
-  console.log(`[on-demand] upserted ${todayRows} rows from AllPricesToday`);
-
-  // ...then ~90d history for the charts.
-  const histRows = await streamFile(MTGJSON.allPrices, 'AllPrices.json.gz', uuidMap, {
-    minDate: minDateISO(BACKFILL_DAYS)
-  });
-  console.log(`[on-demand] upserted ${histRows} rows from AllPrices`);
-
-  await prunePrices(KEEP_DAYS);
-
-  // Resolve the queue: drop ids that now have a price; cooldown the rest (no
-  // MTGJSON data) so they retry later instead of re-firing on every save.
-  const priced = await pricedCardIds(claimed);
-  const got = claimed.filter((id) => priced.has(id));
-  const missed = claimed.filter((id) => !priced.has(id));
-  await clearPriceQueue(got);
-  await markPriceQueueAttempted(missed);
+  // Reconcile the queue against ACTUAL prices: drop every card that now has a
+  // price (so price_status never reports a priced card), then cool down the
+  // claimed ids that remain unpriced. markPriceQueueAttempted updates by id, so
+  // ids already pruned (priced) are no-ops — only genuinely-unpriced cards get
+  // stamped.
+  const cleared = await prunePricedQueue();
+  await markPriceQueueAttempted(claimed);
 
   console.log(
-    `[on-demand] ${got.length} priced (cleared), ${missed.length} no-data (cooldown) — done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
+    `[on-demand] cleared ${cleared} now-priced from queue, cooled down the rest — done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`
   );
 }
 
