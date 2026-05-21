@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { PRICE_RETRY_COOLDOWN_DAYS, SERVICE_ROLE_KEY, SUPABASE_URL } from './config';
 
-// Service-role client. BYPASSRLS: reads every user's owned rows (the union) and
-// writes the global prices table. Server-side only.
+// Service-role client. BYPASSRLS: reads every user's collection rows (the union)
+// and writes the global prices table. Server-side only.
 export const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
@@ -16,16 +16,16 @@ export interface PriceUpsertRow {
   currency: string;
 }
 
-/** The owned-union: distinct Scryfall card ids across ALL users. */
-export async function distinctOwnedCardIds(): Promise<Set<string>> {
+/** The collection-union: distinct Scryfall card ids across ALL users' items. */
+export async function distinctCollectionCardIds(): Promise<Set<string>> {
   const ids = new Set<string>();
   const pageSize = 1000;
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await db
-      .from('owned')
+      .from('collection_items')
       .select('card_id')
       .range(from, from + pageSize - 1);
-    if (error) throw new Error(`owned read failed: ${error.message}`);
+    if (error) throw new Error(`collection read failed: ${error.message}`);
     if (!data || data.length === 0) break;
     for (const row of data) ids.add(String(row.card_id).toLowerCase());
     if (data.length < pageSize) break;

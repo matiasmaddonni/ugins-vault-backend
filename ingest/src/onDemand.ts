@@ -1,7 +1,7 @@
 // On-demand ingest. Drains the price_backfill_queue (cards a user just added
 // that have no price yet) and fetches their MTGJSON prices NOW, instead of
 // waiting for the daily cron. Triggered by GitHub repository_dispatch from
-// PUT /v1/owned. Runs on GitHub Actions (no serverless time limit).
+// PUT /v1/collection. Runs on GitHub Actions (no serverless time limit).
 //
 // MTGJSON has no per-card endpoint, so we still stream the dumps — but scoped
 // to the queued ids. Order matters for "see prices ASAP": AllPricesToday is the
@@ -63,9 +63,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const owned = new Set(claimed);
+  const cards = new Set(claimed);
   const identifiersPath = await downloadToTemp(MTGJSON.identifiers, 'AllIdentifiers.json.gz');
-  const uuidMap = await buildOwnedUuidMap(identifiersPath, owned);
+  const uuidMap = await buildOwnedUuidMap(identifiersPath, cards);
   await cleanup(identifiersPath);
   console.log(`[on-demand] mapped ${uuidMap.size} MTGJSON uuids -> scryfall`);
 

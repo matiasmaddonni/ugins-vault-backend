@@ -5,10 +5,12 @@ The Gathering collection tracker). It ingests MTGJSON prices **server-side** and
 serves each user's owned-card prices + history + movers as a **few-KB JSON**, so
 the phone downloads kilobytes instead of the ~1.2 GB MTGJSON dump.
 
-The **collection lives on the backend** (authoritative): the app reads it back
-via `GET /v1/owned`, so it survives reinstalls and syncs across devices. The
-card **catalogue** (names, art, set codes) stays on device, seeded from
-Scryfall. This backend is **auth + prices only**.
+The **collection lives on the backend** (source of truth): the full collection —
+every card in its stack — is read back via `GET /v1/collection`, so a fresh
+install restores everything and it syncs across devices. The backend is a **thin
+id + ownership store**: it keeps **zero card metadata** (the app re-hydrates
+names/art/sets from Scryfall by id) and treats every enum-ish field as an
+**opaque string** it round-trips verbatim. This backend is **auth + prices only**.
 
 ```
               ┌──────────────────────── GitHub Actions (free) ───────────────────────┐
@@ -18,7 +20,7 @@ Scryfall. This backend is **auth + prices only**.
               └───────────────────────────────────────────┬───────────────────────────┘
                                                            ▼
  iOS app  ──(Supabase JWT)──▶  Vercel read API  ──(JWT, RLS)──▶  Supabase Postgres + Auth
-   GET/PUT /v1/owned · GET /v1/prices · GET /v1/movers        (free tier)
+   GET/PUT /v1/collection · GET /v1/prices · GET /v1/movers        (free tier)
 ```
 
 - **Supabase** (free): Postgres + Auth (user management) + Row-Level Security.
@@ -36,7 +38,7 @@ Everything is **TypeScript**. Big MTGJSON files are **streamed** (`stream-json`
 ```
 api/                      Vercel serverless functions (TypeScript)
   _lib/                   shared (auth/JWT verify, http, pricing+movers port, dispatch)
-  v1/owned.ts             GET + PUT  /v1/owned
+  v1/collection.ts        GET + PUT  /v1/collection
   v1/prices.ts            GET  /v1/prices
   v1/movers.ts            GET  /v1/movers
   health.ts               GET  /api/health
@@ -47,6 +49,7 @@ ingest/src/               GitHub Actions ingest (TypeScript, streaming)
   lib/                    config, db (service role), download, mtgjson stream
 supabase/migrations/      0001 schema · 0002 RLS · 0003 auth trigger · 0004 RPC
                           · 0005 on-demand price queue · 0006 drop fx
+                          · 0007 collection store · 0008 drop owned
 .github/workflows/        ingest-daily.yml (cron) · backfill.yml (manual)
                           · ingest-on-demand.yml (repository_dispatch)
 vercel.json               rewrites /v1/* → /api/v1/*
@@ -60,16 +63,19 @@ vercel.json               rewrites /v1/* → /api/v1/*
 |------------|---------|-------|
 | `auth.users` | —     | managed by Supabase Auth |
 | `profiles` | per-user | `user_id` PK → `auth.users`; auto-created on signup (trigger) |
-| `owned`    | per-user | `(user_id, card_id)` PK, `quantity`. `card_id` = **Scryfall printing UUID**. **Authoritative collection** — the app restores it via `GET /v1/owned`. RLS: a user sees only their rows |
+| `stacks`   | per-user | `id` PK + `user_id`. App's groupings (decks/binders/…). Fields `name`, `kind`, `sort_order`, `format`, `colors[]`, `commander`, `commander_card_id`, `person`, `since` — all **opaque** (app-owned), stored verbatim. RLS: owner-only |
+| `collection_items` | per-user | `id` PK + `user_id`. `card_id` = **Scryfall printing UUID** — the *only* server-meaningful field (feeds the price queue). Plus `stack_id`, `quantity` (≥1), opaque `finish`/`condition`/`language`, `acquired_at`, `notes`. A card_id may repeat across items/stacks. RLS: owner-only |
 | `prices`   | global  | `(card_id, source, finish, date)` PK, `retail`, `currency`. Readable by any authenticated user; only the ingest (service role) writes |
-| `price_backfill_queue` | global | `card_id` PK. Cards added but with no price yet, awaiting the on-demand ingest. Written by an `owned`-insert trigger; drained by the ingest. No RLS policy → invisible to clients |
+| `price_backfill_queue` | global | `card_id` PK. Cards added but with no price yet, awaiting the on-demand ingest. Written by a `collection_items`-insert trigger; drained by the ingest. No RLS policy → invisible to clients |
 
-- **Sources:** `cardkingdom`, `tcgplayer`, `cardmarket`. **Finishes:** `normal`,
-  `foil`, `etched`.
+- **Sources:** `cardkingdom`, `tcgplayer`, `cardmarket`. **Finishes (prices):**
+  `normal`, `foil`, `etched` (MTGJSON's, distinct from the opaque item `finish`).
 - Prices are stored **per finish**; the read API **merges** finishes per day
   (`etched > foil > normal`) to match the app's on-device merge. ~90 days kept;
   older pruned daily.
-- **Movers are computed on read** from the user's `owned` × global `prices`
+- **`owned_prices()` RPC** scopes `prices` to the caller's collection, summing
+  `quantity` per `card_id` across their items. `/v1/prices` + `/v1/movers` read it.
+- **Movers are computed on read** from the user's collection × global `prices`
   (few users today). A per-user precompute can be added later if needed.
 
 ---
@@ -89,6 +95,8 @@ vercel.json               rewrites /v1/* → /api/v1/*
    - `supabase/migrations/0004_functions.sql`
    - `supabase/migrations/0005_price_queue.sql`
    - `supabase/migrations/0006_drop_fx.sql`
+   - `supabase/migrations/0007_collection.sql`
+   - `supabase/migrations/0008_drop_owned.sql`  *(run after 0007)*
 3. **Auth config** (Authentication → Providers / Sign In):
    - Enable **Email** (password) and, for passwordless, **Magic Link**. These are
      sensible defaults for a personal app; add an OAuth provider later if wanted.
@@ -113,7 +121,7 @@ supabase db push           # applies supabase/migrations/*
    |------|-------|
    | `SUPABASE_URL` | `https://<ref>.supabase.co` |
    | `SUPABASE_ANON_KEY` | the **publishable / anon** key (safe; cannot bypass RLS) |
-   | `GH_DISPATCH_TOKEN` | *(optional)* fine-grained PAT, `Actions: read and write` on this repo — lets `PUT /v1/owned` trigger the on-demand ingest |
+   | `GH_DISPATCH_TOKEN` | *(optional)* fine-grained PAT, `Actions: read and write` on this repo — lets `PUT /v1/collection` trigger the on-demand ingest |
    | `GH_REPO` | *(optional)* `owner/name` of this repo |
 
    > Do **not** put the service-role key in Vercel. The API only ever verifies
@@ -135,10 +143,10 @@ In the GitHub repo → **Settings → Secrets and variables → Actions**:
 
 Then:
 
-1. Add cards as a user (via the app, or `PUT /v1/owned`) so the owned-union is
-   non-empty.
+1. Add cards as a user (via the app, or `PUT /v1/collection`) so the
+   collection-union is non-empty.
 2. Run **Backfill price history** once (Actions tab → *Backfill price history* →
-   *Run workflow*). Seeds ~90 days for the owned-union.
+   *Run workflow*). Seeds ~90 days for the collection-union.
 3. The **Daily price ingest** runs on cron (`09:00 UTC`) and keeps things fresh.
    It also keeps the Supabase project awake.
 
@@ -147,8 +155,8 @@ Then:
 So a freshly added card doesn't wait until the next `09:00 UTC` cron:
 
 ```
-PUT /v1/owned ─▶ replace_owned ─▶ trigger enqueues card_ids with NO price yet
-      │                                     (price_backfill_queue)
+PUT /v1/collection ─▶ replace_collection ─▶ trigger enqueues card_ids with NO price yet
+      │                                            (price_backfill_queue)
       └─ if queue non-empty ─▶ GitHub repository_dispatch "new-cards"
                                      │
                                      ▼
@@ -157,9 +165,10 @@ PUT /v1/owned ─▶ replace_owned ─▶ trigger enqueues card_ids with NO pric
                          scoped to the queued ids ─▶ upsert ─▶ clear queue
 ```
 
-- The `owned`-insert trigger (migration `0005`) only enqueues cards that have
-  **no** price rows, so re-saving an unchanged collection enqueues nothing and
-  fires no job.
+- The `collection_items`-insert trigger (migration `0007`, reusing the
+  `enqueue_missing_price` fn from `0005`) only enqueues cards that have **no**
+  price rows, so re-saving an unchanged collection enqueues nothing and fires no
+  job. Items sharing a card_id collapse to one queue row (`ON CONFLICT`).
 - Cards MTGJSON has no paper price for (tokens, art cards) can't get a price
   row, so they'd otherwise re-enqueue on every save. The ingest stamps them
   with a **7-day cooldown** instead of deleting them, and the dispatch check
@@ -201,25 +210,60 @@ endpoint), then sends the resulting access token as the bearer. The API verifies
 it (`getClaims`, ES256 local verify) and derives `user_id` from the `sub` claim;
 RLS scopes every query.
 
-### `GET /v1/owned` — my collection (restore)
-```jsonc
-{ "cards": [ { "cardId": "0000abcd-....", "quantity": 2 }, ... ], "count": 123 }
-```
-The authoritative collection. The app loads this on launch / after a reinstall
-to restore the user's cards (the on-device store is just a cache). Same shape as
-the `PUT` body, so it round-trips.
+> **Opaque fields.** Except `cardId`/`stackId`/`commanderCardId` (UUIDs) every
+> field below — `kind`, `finish`, `condition`, `format`, `colors`, `language`,
+> etc. — is an **opaque string the app owns**. The backend stores and returns
+> them verbatim and never validates or enumerates their values.
 
-### `PUT /v1/owned` — replace my owned list
+```
+Stack          = { id: uuid, name: string, kind: string, sortOrder: int,
+                   createdAt: ISO8601, format: string|null, colors: string[],
+                   commander: string|null, commanderCardId: uuid|null,
+                   person: string|null, since: ISO8601|null }
+CollectionItem = { id: uuid, cardId: uuid, stackId: uuid, quantity: int>=1,
+                   finish: string, condition: string, language: string,
+                   acquiredAt: ISO8601|null, notes: string|null }
+```
+
+### `GET /v1/collection` — my whole collection (restore)
+```jsonc
+{
+  "stacks": [
+    {
+      "id": "1111....", "name": "Commander — Atraxa", "kind": "deck",
+      "sortOrder": 0, "createdAt": "2026-05-21T15:00:00+00:00",
+      "format": "commander", "colors": ["W", "U", "B", "G"],
+      "commander": "Atraxa, Praetors' Voice", "commanderCardId": "abcd....",
+      "person": null, "since": null
+    }
+  ],
+  "items": [
+    {
+      "id": "2222....", "cardId": "0000abcd....", "stackId": "1111....",
+      "quantity": 1, "finish": "nonfoil", "condition": "NM", "language": "en",
+      "acquiredAt": null, "notes": null
+    }
+  ]
+}
+```
+The authoritative collection — a fresh install restores every card in its stack
+from here. The app re-hydrates display data (name/art/set/printings) from
+Scryfall by `cardId`.
+
+### `PUT /v1/collection` — replace my whole collection
 ```jsonc
 // request
-{ "cards": [ { "cardId": "0000abcd-....", "quantity": 2 }, ... ] }
+{ "stacks": [ Stack, ... ], "items": [ CollectionItem, ... ] }
 // response
-{ "ok": true, "count": 123, "dispatched": true }
+{ "ok": true, "stacks": 3, "items": 142, "dispatched": true }
 ```
-Atomic replace (delete-then-insert in one transaction). `cardId` = Scryfall
-printing UUID. Duplicate ids are de-duplicated (last wins). `dispatched` is
-`true` when this save enqueued at least one new-to-price card and the on-demand
-ingest was triggered (see *On-demand prices*); `false` otherwise.
+Atomic replace (delete-all + insert in one transaction). Validates: every `id`,
+`cardId`, `stackId` is a UUID; `quantity` is an int ≥ 1; every `item.stackId`
+appears in the `stacks` payload. Duplicate ids are de-duplicated (last wins).
+`user_id` always comes from the JWT — any `user_id` in the payload is ignored.
+`stacks`/`items` echo the inserted row counts. `dispatched` is `true` when this
+save enqueued at least one new-to-price card and the on-demand ingest was
+triggered (see *On-demand prices*); `false` otherwise.
 
 ### `GET /v1/prices?window=35&source=tcgplayer`
 ```jsonc
@@ -237,9 +281,9 @@ ingest was triggered (see *On-demand prices*); `false` otherwise.
   ]
 }
 ```
-Only owned cards **with data** for the chosen source are returned (the app falls
-back to on-device Scryfall prices for the rest). Finishes are merged per day
-(`etched > foil > normal`).
+Only collection cards **with data** for the chosen source are returned (the app
+falls back to on-device Scryfall prices for the rest). Finishes are merged per
+day (`etched > foil > normal`).
 
 **Maps to the app's `PriceSnapshot`** — each `history` point becomes
 `PriceSnapshot { cardID: cardId, source, date, currency, retail: price }`, and
@@ -280,21 +324,21 @@ backend does not.
 
 **ID mapping (critical).** MTGJSON keys cards by its own MTGJSON UUID, not the
 Scryfall id. The ingest streams `AllIdentifiers.json.gz` to build a
-`mtgjsonUuid → scryfallId` map (restricted to the owned-union via
+`mtgjsonUuid → scryfallId` map (restricted to the collection-union via
 `identifiers.scryfallId`), then keys/serves every price by **scryfallId** —
-which is what `owned.card_id` holds. `scryfallId` is not unique across
+which is what `collection_items.card_id` holds. `scryfallId` is not unique across
 multi-faced cards (several MTGJSON uuids share one); those collapse onto the same
 price row, which is correct (faces share a price). The ingest **dedupes by
 `(card_id, source, finish, date)` before upserting** so the many-to-one collapse
 can't put a duplicate conflict key in one statement (Postgres `ON CONFLICT` can't
 touch the same row twice).
 
-**Free-tier margins.** Prices are stored for the **union of all users' owned
+**Free-tier margins.** Prices are stored for the **union of all users' collection
 cards × 3 sources × ~90 days**. One user ≈ 40–200 MB, comfortably under the
-500 MB free DB. Watch this at scale: if the owned-union approaches the full
+500 MB free DB. Watch this at scale: if the collection-union approaches the full
 ~90k-card universe it would be ~3.6 GB → either Supabase Pro or keep ingest
-scoped to the owned-union (the default here). App egress + Vercel bandwidth are
-tiny per user.
+scoped to the collection-union (the default here). App egress + Vercel bandwidth
+are tiny per user.
 
 **Verified limits (May 2026).** Supabase free: 500 MB DB, ~50k Auth MAU, pauses
 after 7 days idle (the daily write prevents this). Vercel Hobby: 300 s / 2 GB
