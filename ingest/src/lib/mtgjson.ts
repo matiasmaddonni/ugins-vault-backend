@@ -24,7 +24,7 @@ const { streamObject } = require('stream-json/streamers/StreamObject') as typeof
 //
 // CRITICAL ID MAPPING: MTGJSON keys by its own uuid; the app speaks Scryfall
 // printing ids. We first build a uuid->scryfallId map (restricted to the
-// owned-union) from AllIdentifiers, then key every price row by scryfallId.
+// collection-union) from AllIdentifiers, then key every price row by scryfallId.
 // Note: scryfallId is NOT unique across multi-faced cards (multiple MTGJSON
 // uuids share one scryfallId) — those collapse onto the same price PK, which is
 // fine (faces share a price); last write wins on upsert.
@@ -57,7 +57,7 @@ function dataStream(filePath: string) {
 
 /**
  * Streams AllIdentifiers and returns a `mtgjsonUuid -> scryfallId` map limited
- * to MTGJSON cards whose scryfallId is in the owned-union.
+ * to MTGJSON cards whose scryfallId is in the collection-union.
  */
 export async function buildOwnedUuidMap(
   identifiersPath: string,

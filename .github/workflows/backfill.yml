@@ -1,7 +1,7 @@
 name: Backfill price history
 
 # Manual only. Streams the full AllPrices (~135 MB gz) to seed history for the
-# owned-union. Run once after the first users add cards, then rely on the daily
+# collection-union. Run once after the first users add cards, then rely on the daily
 # job. Safe to re-run (idempotent upsert).
 on:
   workflow_dispatch:

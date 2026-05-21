@@ -17,7 +17,7 @@ import {
  * GET /v1/movers?source=tcgplayer&window=35&threshold=1
  *
  * Server-side mirror of RealDashboardRepository.computeHistory for the
- * authenticated user's owned cards. Returns gainers/losers (top 5 each, by
+ * authenticated user's collection cards. Returns gainers/losers (top 5 each, by
  * per-unit 7-day delta), monthSparkline (portfolio value per sampled day),
  * weekDeltaUSD and weekDeltaPct. `cardId` is the Scryfall id — the client
  * resolves name/setCode from its on-device catalogue.

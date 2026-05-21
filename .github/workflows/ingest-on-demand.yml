@@ -1,6 +1,6 @@
 name: On-demand price ingest
 
-# Fired by PUT /v1/owned (GitHub repository_dispatch, event_type "new-cards")
+# Fired by PUT /v1/collection (GitHub repository_dispatch, event_type "new-cards")
 # when a user adds a card that has no price yet. Drains price_backfill_queue and
 # fetches just those cards' MTGJSON prices now, instead of waiting for the daily
 # cron. Also runnable by hand.

@@ -14,7 +14,7 @@ import {
 /**
  * GET /v1/prices?window=35&source=tcgplayer
  *
- * Per owned card with data in the window: { cardId, source, currency, current,
+ * Per collection card with data in the window: { cardId, source, currency, current,
  * history:[{date,price}] }. The iOS app maps each `history` point to a
  * PriceSnapshot { cardID, source, date, currency, retail: price } and feeds its
  * existing computeHistory. Cards with no data for the chosen source are omitted
