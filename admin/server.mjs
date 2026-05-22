@@ -26,22 +26,35 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}` };
 const daysAgo = (n) => { const d = new Date(); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
 
 const rest = async (path) => (await fetch(`${URL}/rest/v1/${path}`, { headers: H })).json();
+// Paged fetch — PostgREST caps a response at 1000 rows, so a single query over
+// many cards/days silently truncates (made cards look "stale"). `path` must
+// already contain a `?` query.
+async function restAll(path) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const d = await rest(`${path}&limit=1000&offset=${from}`);
+    if (!Array.isArray(d) || d.length === 0) break;
+    out.push(...d);
+    if (d.length < 1000) break;
+  }
+  return out;
+}
 const json = (res, code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
 const readBody = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } }); });
 
 // ── per-user debug snapshot ──────────────────────────────────────────────────
 async function userDetail(uid) {
   const [stacks, items] = await Promise.all([
-    rest(`stacks?user_id=eq.${uid}&select=id,name,kind,sort_order&order=sort_order`),
-    rest(`collection_items?user_id=eq.${uid}&select=id,card_id,stack_id,quantity,finish,condition,language`)
+    restAll(`stacks?user_id=eq.${uid}&select=id,name,kind,sort_order&order=sort_order`),
+    restAll(`collection_items?user_id=eq.${uid}&select=id,card_id,stack_id,quantity,finish,condition,language`)
   ]);
   const cardIds = [...new Set(items.map((i) => String(i.card_id).toLowerCase()))];
   let recent = [], queue = [];
   if (cardIds.length) {
     const inList = `(${cardIds.join(',')})`;
     [recent, queue] = await Promise.all([
-      rest(`prices?card_id=in.${inList}&date=gte.${daysAgo(7)}&select=card_id,source,date`),
-      rest(`price_backfill_queue?card_id=in.${inList}&select=card_id,last_attempt_at`)
+      restAll(`prices?card_id=in.${inList}&date=gte.${daysAgo(7)}&select=card_id,source,date`),
+      restAll(`price_backfill_queue?card_id=in.${inList}&select=card_id,last_attempt_at`)
     ]);
   }
   const recentBy = new Map();
