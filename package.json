@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "ingest:daily": "tsx ingest/src/daily.ts",
     "ingest:backfill": "tsx ingest/src/backfill.ts",
-    "ingest:on-demand": "tsx ingest/src/onDemand.ts"
+    "ingest:on-demand": "tsx ingest/src/onDemand.ts",
+    "admin": "node admin/server.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
