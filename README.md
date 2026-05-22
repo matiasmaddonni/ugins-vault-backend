@@ -138,7 +138,7 @@ In the GitHub repo → **Settings → Secrets and variables → Actions**:
 - **Variables (optional):** `PRICE_SOURCES` (e.g. `cardkingdom,tcgplayer,cardmarket`).
 
 Then add cards (app or API), run **Backfill price history** once, and the
-**Daily price ingest** (`09:00 UTC`) keeps things fresh + the project awake.
+**Daily price ingest** (`14:00 UTC`) keeps things fresh + the project awake.
 
 ### On-demand prices (new cards show ASAP)
 

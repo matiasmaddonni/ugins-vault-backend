@@ -2,9 +2,11 @@ name: Daily price ingest
 
 on:
   schedule:
-    # 09:00 UTC daily. GitHub may delay scheduled runs under load; that's fine —
+    # 14:00 UTC daily — late enough that MTGJSON has usually published the
+    # current day's AllPricesToday, so we ingest same-day prices instead of
+    # yesterday's. GitHub may delay scheduled runs under load; that's fine —
     # this job is idempotent (upsert) and also keeps the Supabase project awake.
-    - cron: '0 9 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch: {}
 
 # Never let daily + backfill write at the same time.
