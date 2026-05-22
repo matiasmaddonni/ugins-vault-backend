@@ -12,6 +12,8 @@
 // has on-device Scryfall fallback prices the backend does not. Documented.
 // ───────────────────────────────────────────────────────────────────────────
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 export const ALLOWED_SOURCES = ['cardkingdom', 'tcgplayer', 'cardmarket'] as const;
 export type Source = (typeof ALLOWED_SOURCES)[number];
 
@@ -251,4 +253,22 @@ export function computeMovers(rows: PriceRow[], source: Source, threshold: numbe
   const losers = movers.filter((m) => m.deltaUSD < 0).sort((a, b) => a.pct - b.pct).slice(0, TOP_N);
 
   return { source, currency, days: days.length, weekDeltaUSD, weekDeltaPct, monthSparkline, gainers, losers };
+}
+
+// ── owned_prices RPC reader (paginated) ──────────────────────────────────────
+// PostgREST caps a response at 1000 rows. owned_prices returns one row per
+// (card, finish, day) for the window, which for a real collection is many
+// thousands — a single call silently truncates and the app shows "searching"
+// for every card past the cut. Page through with Range until exhausted.
+export async function fetchOwnedPrices(db: SupabaseClient, source: Source, since: string): Promise<PriceRow[]> {
+  const rows: PriceRow[] = [];
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await db.rpc('owned_prices', { p_source: source, p_since: since }).range(from, from + size - 1);
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) break;
+    rows.push(...(data as PriceRow[]));
+    if (data.length < size) break;
+  }
+  return rows;
 }

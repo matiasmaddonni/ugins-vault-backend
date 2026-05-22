@@ -8,9 +8,9 @@ import {
   computeMovers,
   DEFAULT_THRESHOLD,
   DEFAULT_WINDOW,
+  fetchOwnedPrices,
   pickSource,
-  todayISO,
-  type PriceRow
+  todayISO
 } from '../_lib/pricing.js';
 
 /**
@@ -36,12 +36,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const threshold = clampFloat(firstStr(req.query.threshold), DEFAULT_THRESHOLD, 0, 1_000_000);
   const since = addDaysISO(todayISO(), -window);
 
-  const { data, error } = await auth.db.rpc('owned_prices', { p_source: source, p_since: since });
-  if (error) {
-    sendJson(res, 500, { error: 'db_error', detail: error.message });
+  let rows;
+  try {
+    rows = await fetchOwnedPrices(auth.db, source, since);
+  } catch (e) {
+    sendJson(res, 500, { error: 'db_error', detail: e instanceof Error ? e.message : String(e) });
     return;
   }
 
-  const result = computeMovers((data ?? []) as PriceRow[], source, threshold);
+  const result = computeMovers(rows, source, threshold);
   sendJson(res, 200, result);
 }
